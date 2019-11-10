@@ -78,7 +78,7 @@ def load_word_embeddings(input_vocabulary, output_vocabulary, output_vocabulary_
   def read_glove_embedding(embedding_filename, embedding_size):
     glove_embeddings = {}
 
-    with open(embedding_filename) as f:
+    with open(embedding_filename, encoding="utf8") as f:
       cnt = 1
       for line in f:
         cnt += 1
