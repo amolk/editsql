@@ -42,7 +42,7 @@ TABLE_TYPE = {
 COND_OPS = ('and', 'or')
 SQL_OPS = ('intersect', 'union', 'except')
 ORDER_OPS = ('desc', 'asc')
-
+mapped_entities = []
 
 
 class Schema:
@@ -64,7 +64,7 @@ class Schema:
     def _map(self, schema):
         idMap = {'*': "__all__"}
         id = 1
-        for key, vals in schema.iteritems():
+        for key, vals in schema.items():
             for val in vals:
                 idMap[key.lower() + "." + val.lower()] = "__" + key.lower() + "." + val.lower() + "__"
                 id += 1
@@ -168,6 +168,7 @@ def parse_col(toks, start_idx, tables_with_alias, schema, default_tables=None):
     """
         :returns next idx, column id
     """
+    global mapped_entities
     tok = toks[start_idx]
     if tok == "*":
         return start_idx + 1, schema.idMap[tok]
@@ -175,6 +176,7 @@ def parse_col(toks, start_idx, tables_with_alias, schema, default_tables=None):
     if '.' in tok:  # if token is a composite
         alias, col = tok.split('.')
         key = tables_with_alias[alias] + "." + col
+        mapped_entities.append((start_idx, tables_with_alias[alias] + "@" + col))
         return start_idx+1, schema.idMap[key]
 
     assert default_tables is not None and len(default_tables) > 0, "Default tables should not be None or empty"
@@ -183,6 +185,7 @@ def parse_col(toks, start_idx, tables_with_alias, schema, default_tables=None):
         table = tables_with_alias[alias]
         if tok in schema.schema[table]:
             key = table + "." + tok
+            mapped_entities.append((start_idx, table + "@" + tok))
             return start_idx+1, schema.idMap[key]
 
     assert False, "Error col: {}".format(tok)
@@ -291,7 +294,7 @@ def parse_value(toks, start_idx, tables_with_alias, schema, default_tables=None)
                 and toks[end_idx] != 'and' and toks[end_idx] not in CLAUSE_KEYWORDS and toks[end_idx] not in JOIN_KEYWORDS:
                     end_idx += 1
 
-            idx, val = parse_col_unit(toks[start_idx: end_idx], 0, tables_with_alias, schema, default_tables)
+            idx, val = parse_col_unit(toks[: end_idx], start_idx, tables_with_alias, schema, default_tables)
             idx = end_idx
 
     if isBlock:
@@ -486,16 +489,20 @@ def parse_limit(toks, start_idx):
 
     if idx < len_ and toks[idx] == 'limit':
         idx += 2
-        # make limit value can work, cannot assume put 1 as a fake limit number
-        if type(toks[idx-1]) != int:
-            return idx, 1
-
-        return idx, int(toks[idx-1])
+        try:
+            limit_val = int(toks[idx-1])
+        except Exception:
+            limit_val = '"value"'
+        return idx, limit_val
 
     return idx, None
 
 
-def parse_sql(toks, start_idx, tables_with_alias, schema):
+def parse_sql(toks, start_idx, tables_with_alias, schema, mapped_entities_fn=None):
+    global mapped_entities
+
+    if mapped_entities_fn is not None:
+        mapped_entities = mapped_entities_fn()
     isBlock = False # indicate whether this is a block of sql/sub-sql
     len_ = len(toks)
     idx = start_idx
@@ -542,7 +549,11 @@ def parse_sql(toks, start_idx, tables_with_alias, schema):
         idx += 1
         idx, IUE_sql = parse_sql(toks, idx, tables_with_alias, schema)
         sql[sql_op] = IUE_sql
-    return idx, sql
+
+    if mapped_entities_fn is not None:
+        return idx, sql, mapped_entities
+    else:
+        return idx, sql
 
 
 def load_data(fpath):

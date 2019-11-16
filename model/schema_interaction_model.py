@@ -21,7 +21,7 @@ from .decoder import SequencePredictorWithSchema
 from . import utils_bert
 
 import data_util.atis_batch
-
+import pdb
 
 LIMITED_INTERACTIONS = {"raw/atis2/12-1.1/ATIS2/TEXT/TRAIN/SRI/QS0/1": 22,
                         "raw/atis3/17-1.1/ATIS3/SP_TRN/MIT/8K7/5": 14,
@@ -121,6 +121,7 @@ class SchemaInteractionATISModel(ATISModel):
         fed_sequence = []
         loss = None
         token_accuracy = 0.
+        beam_info = {"candidates": []}
 
         if self.params.use_encoder_attention:
             schema_attention = self.utterance2schema_attention_module(torch.stack(schema_states,dim=0), input_hidden_states).vector # input_value_size x len(schema)
@@ -192,6 +193,32 @@ class SchemaInteractionATISModel(ATISModel):
                                            dropout_amount=self.dropout)
             predicted_sequence = decoder_results.sequence
             fed_sequence = predicted_sequence
+            if gold_query and not training:
+                token_accuracy = torch_utils.per_token_accuracy(gold_query, predicted_sequence)
+
+                found_gold = False
+                for beam_item in decoder_results.beam:
+                    if beam_item[1].sequence[-1] == "_EOS":
+                        acc = torch_utils.per_token_accuracy(gold_query, beam_item[1].sequence)
+                        if acc > 0.99999:
+                            found_gold = True
+                            target = 1
+                        else:
+                            target = 0
+
+                        beam_info["candidates"].append({
+                            "sql_query": ' '.join(beam_item[1].sequence[:-1]),
+                            "accuracy": acc,
+                            "target": target
+                        })
+
+
+                if not found_gold:
+                    beam_info["candidates"].append({
+                        "sql_query": ' '.join(gold_query),
+                        "accuracy": 1.0,
+                        "target": 1
+                    })
 
         decoder_states = [pred.decoder_state for pred in decoder_results.predictions]
 
@@ -214,7 +241,8 @@ class SchemaInteractionATISModel(ATISModel):
                 loss,
                 token_accuracy,
                 decoder_states,
-                decoder_results)
+                decoder_results,
+                beam_info)
 
     def encode_schema_bow_simple(self, input_schema):
         schema_states = []
@@ -556,6 +584,7 @@ class SchemaInteractionATISModel(ATISModel):
                                         utterance_states,
                                         schema_states,
                                         max_generation_length,
+                                        gold_query=utterance.interaction_item.interaction.utterances[0].gold_query_to_use,
                                         input_sequence=flat_sequence,
                                         previous_queries=previous_queries,
                                         previous_query_states=previous_query_states,

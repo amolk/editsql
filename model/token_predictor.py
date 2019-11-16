@@ -30,6 +30,22 @@ class PredictionInputWithSchema(namedtuple('PredictionInputWithSchema',
     """ Inputs to the token predictor. """
     __slots__ = ()
 
+class PredictionStepInputWithSchema(namedtuple('PredictionStepInputWithSchema',
+                                 ('index',
+                                  'decoder_input',
+                                  'decoder_states',
+                                  'encoder_states',
+                                  'schema_states',
+                                  'snippets',
+                                  'gold_sequence',
+                                  'input_sequence',
+                                  'previous_queries',
+                                  'previous_query_states',
+                                  'input_schema',
+                                  'dropout_amount',
+                                  'predictions'))):
+    """ Inputs to the next token predictor. """
+    __slots__ = ()
 
 class TokenPrediction(namedtuple('TokenPrediction',
                                  ('scores',

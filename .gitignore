@@ -1,0 +1,6 @@
+__pycache__
+logs_spider_editsql/
+data/spider.full
+*.bin
+processed_data_spider_removefrom/
+data/spider_data_removefrom/

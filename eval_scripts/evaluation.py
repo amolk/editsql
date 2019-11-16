@@ -18,14 +18,14 @@
 #   'union': None/sql
 # }
 ################################
-
-import os, sys
+import copy
+import csv
+import os
 import json
 import sqlite3
-import traceback
 import argparse
 
-from process_sql import tokenize, get_schema, get_tables_with_alias, Schema, get_sql
+from process_sql import get_schema, Schema, get_sql
 
 # Flag to disable value evaluation
 DISABLE_VALUE = True
@@ -385,7 +385,13 @@ class Evaluator:
         if len(label['from']['table_units']) > 0:
             label_tables = sorted(label['from']['table_units'])
             pred_tables = sorted(pred['from']['table_units'])
-            return label_tables == pred_tables
+            if label_tables != pred_tables:
+                return False
+        if len(label['from']['conds']) > 0:
+            label_joins = sorted(label['from']['conds'], key=lambda x: str(x))
+            pred_joins = sorted(pred['from']['conds'], key=lambda x: str(x))
+            if label_joins != pred_joins:
+                return False
         return 1
 
     def eval_partial_match(self, pred, label):
@@ -434,8 +440,8 @@ def isValidSQL(sql, db):
     conn = sqlite3.connect(db)
     cursor = conn.cursor()
     try:
-        cursor.execute(sql)
-    except:
+        cursor.execute(sql, [])
+    except Exception as e:
         return False
     return True
 
@@ -445,33 +451,33 @@ def print_scores(scores, etype):
     partial_types = ['select', 'select(no AGG)', 'where', 'where(no OP)', 'group(no Having)',
                      'group', 'order', 'and/or', 'IUEN', 'keywords']
 
-    print "{:20} {:20} {:20} {:20} {:20} {:20}".format("", *levels)
+    print("{:20} {:20} {:20} {:20} {:20} {:20}".format("", *levels))
     counts = [scores[level]['count'] for level in levels]
-    print "{:20} {:<20d} {:<20d} {:<20d} {:<20d} {:<20d}".format("count", *counts)
+    print("{:20} {:<20d} {:<20d} {:<20d} {:<20d} {:<20d}".format("count", *counts))
 
     if etype in ["all", "exec"]:
-        print '=====================   EXECUTION ACCURACY     ====================='
+        print('=====================   EXECUTION ACCURACY     =====================')
         this_scores = [scores[level]['exec'] for level in levels]
-        print "{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format("execution", *this_scores)
+        print("{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format("execution", *this_scores))
 
     if etype in ["all", "match"]:
-        print '\n====================== EXACT MATCHING ACCURACY ====================='
+        print('\n====================== EXACT MATCHING ACCURACY =====================')
         exact_scores = [scores[level]['exact'] for level in levels]
-        print "{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format("exact match", *exact_scores)
-        print '\n---------------------PARTIAL MATCHING ACCURACY----------------------'
+        print("{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format("exact match", *exact_scores))
+        print('\n---------------------PARTIAL MATCHING ACCURACY----------------------')
         for type_ in partial_types:
             this_scores = [scores[level]['partial'][type_]['acc'] for level in levels]
-            print "{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores)
+            print("{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores))
 
-        print '---------------------- PARTIAL MATCHING RECALL ----------------------'
+        print('---------------------- PARTIAL MATCHING RECALL ----------------------')
         for type_ in partial_types:
             this_scores = [scores[level]['partial'][type_]['rec'] for level in levels]
-            print "{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores)
+            print("{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores))
 
-        print '---------------------- PARTIAL MATCHING F1 --------------------------'
+        print('---------------------- PARTIAL MATCHING F1 --------------------------')
         for type_ in partial_types:
             this_scores = [scores[level]['partial'][type_]['f1'] for level in levels]
-            print "{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores)
+            print("{:20} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f} {:<20.3f}".format(type_, *this_scores))
 
 
 def evaluate(gold, predict, db_dir, etype, kmaps):
@@ -489,6 +495,7 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
                      'group', 'order', 'and/or', 'IUEN', 'keywords']
     entries = []
     scores = {}
+    debug_output = []
 
     for level in levels:
         scores[level] = {'count': 0, 'partial': {}, 'exact': 0.}
@@ -532,6 +539,8 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
             }
             eval_err_num += 1
             print("eval_err_num:{}".format(eval_err_num))
+            print(p_str)
+            print()
 
         # rebuild sql for value evaluation
         kmap = kmaps[db_name]
@@ -542,10 +551,16 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
         p_sql = rebuild_sql_val(p_sql)
         p_sql = rebuild_sql_col(p_valid_col_units, p_sql, kmap)
 
+        # p_sql_copy = copy.deepcopy(p_sql)
+        # g_sql_copy = copy.deepcopy(g_sql)
+        # if not eval_exec_match(db, p_str, g_str, p_sql_copy, g_sql_copy) and evaluator.eval_exact_match(p_sql_copy, g_sql_copy):
+        #     a = 1
+
         if etype in ["all", "exec"]:
             exec_score = eval_exec_match(db, p_str, g_str, p_sql, g_sql)
             if exec_score:
                 scores[hardness]['exec'] += 1
+            scores['all']['exec'] += exec_score
 
         if etype in ["all", "match"]:
             exact_score = evaluator.eval_exact_match(p_sql, g_sql)
@@ -580,6 +595,12 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
                 'partial': partial_scores
             })
 
+        debug_output.append([
+            hardness,
+            g_str,
+            p_str,
+        ])
+
     for level in levels:
         if scores[level]['count'] == 0:
             continue
@@ -607,6 +628,10 @@ def evaluate(gold, predict, db_dir, etype, kmaps):
                         scores[level]['partial'][type_]['rec'] + scores[level]['partial'][type_]['acc'])
 
     print_scores(scores, etype)
+    with open('debug_output.csv', 'w') as csvfile:
+        csvwriter = csv.writer(csvfile, delimiter="\t")
+        for row in debug_output:
+            csvwriter.writerow(row)
 
 
 def eval_exec_match(db, p_str, g_str, pred, gold):
@@ -616,6 +641,7 @@ def eval_exec_match(db, p_str, g_str, pred, gold):
     """
     conn = sqlite3.connect(db)
     cursor = conn.cursor()
+    conn.text_factory = bytes
     try:
         cursor.execute(p_str)
         p_res = cursor.fetchall()

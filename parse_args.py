@@ -102,6 +102,8 @@ def interpret_args():
     parser.add_argument('--use_schema_self_attention', type=bool, default=False)
     parser.add_argument('--use_schema_encoder_2', type=bool, default=False)
 
+    parser.add_argument('--beam_size', type=int, default=10)
+
     ### Training parameters
     parser.add_argument('--batch_size', type=int, default=16)
     parser.add_argument('--train_maximum_sql_length', type=int, default=200)
@@ -124,6 +126,7 @@ def interpret_args():
 
     parser.add_argument('--evaluate', type=bool, default=False)
     parser.add_argument('--attention', type=bool, default=False)
+    parser.add_argument('--last_save_file', type=str, default="")
     parser.add_argument('--save_file', type=str, default="")
     parser.add_argument('--enable_testing', type=bool, default=False)
     parser.add_argument('--use_predicted_queries', type=bool, default=False)
@@ -132,6 +135,7 @@ def interpret_args():
     parser.add_argument('--eval_maximum_sql_length', type=int, default=1000)
     parser.add_argument('--results_note', type=str, default='')
     parser.add_argument('--compute_metrics', type=bool, default=False)
+    parser.add_argument('--beam_candidates_save_file', type=str, default="")
 
     parser.add_argument('--reference_results', type=str, default='')
 

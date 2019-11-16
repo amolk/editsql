@@ -18,8 +18,8 @@ from model_util import Metrics, evaluate_utterance_sample, evaluate_interaction_
 
 import torch
 
-np.random.seed(0)
-random.seed(0)
+np.random.seed(42)
+random.seed(42)
 
 VALID_EVAL_METRICS = [Metrics.LOSS, Metrics.TOKEN_ACCURACY, Metrics.STRING_ACCURACY]
 TRAIN_EVAL_METRICS = [Metrics.LOSS, Metrics.TOKEN_ACCURACY, Metrics.STRING_ACCURACY]
@@ -170,7 +170,7 @@ def train(model, data, params):
 
         previous_epoch_loss = valid_loss
         saved = False
-        
+
         if not saved and string_accuracy > maximum_string_accuracy:
             maximum_string_accuracy = string_accuracy
             patience = patience * params.patience_ratio
@@ -327,6 +327,12 @@ def main():
 
     if params.train:
         last_save_file = train(model, data, params)
+
+    if not last_save_file:
+        last_save_file = params.last_save_file
+        assert last_save_file
+    if params.evaluate and 'train' in params.evaluate_split:
+        evaluate(model, data, params, last_save_file, split='train')
     if params.evaluate and 'valid' in params.evaluate_split:
         evaluate(model, data, params, last_save_file, split='valid')
     if params.evaluate and 'dev' in params.evaluate_split:

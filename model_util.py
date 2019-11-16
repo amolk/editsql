@@ -9,6 +9,7 @@ import progressbar
 import model.torch_utils
 import data_util.sql_util
 import torch
+import pdb
 
 def write_prediction(fileptr,
                      identifier,
@@ -23,7 +24,8 @@ def write_prediction(fileptr,
                      database_username,
                      database_password,
                      database_timeout,
-                     compute_metrics=True):
+                     compute_metrics=True,
+                     beam_info=None):
     pred_obj = {}
     pred_obj["identifier"] = identifier
     if len(identifier.split('/')) == 2:
@@ -42,6 +44,7 @@ def write_prediction(fileptr,
     pred_obj["flat_gold_queries"] = flat_gold_queries
     pred_obj["index_in_interaction"] = index_in_interaction
     pred_obj["gold_tables"] = str(gold_tables)
+    pred_obj["beam_info"] = beam_info
 
     # Now compute the metrics we want.
 
@@ -431,8 +434,7 @@ def evaluate_interaction_sample(sample,
         for j, pred in enumerate(example_preds):
             num_utterances += 1
 
-            sequence, loss, token_accuracy, _, decoder_results = pred
-
+            sequence, loss, token_accuracy, _, decoder_results, beam_info = pred
 
             if use_predicted_queries:
                 item = interaction.processed_utterances[j]
@@ -475,7 +477,8 @@ def evaluate_interaction_sample(sample,
                     database_username=database_username,
                     database_password=database_password,
                     database_timeout=database_timeout,
-                    compute_metrics=compute_metrics)
+                    compute_metrics=compute_metrics,
+                    beam_info=beam_info)
 
             update_sums(metrics,
                         metrics_sums,

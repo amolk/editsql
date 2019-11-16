@@ -1,17 +1,20 @@
 """ Decoder for the SQL generation problem."""
 
 from collections import namedtuple
+import copy
+import json
 import numpy as np
 
 import torch
 import torch.nn.functional as F
 from . import torch_utils
 
-from .token_predictor import PredictionInput, PredictionInputWithSchema
+from .token_predictor import PredictionInput, PredictionInputWithSchema, PredictionStepInputWithSchema
+from .beam_search import BeamSearch
 import data_util.snippets as snippet_handler
 from . import embedder
 from data_util.vocabulary import EOS_TOK, UNK_TOK
-
+import pdb
 def flatten_distribution(distribution_map, probabilities):
     """ Flattens a probability distribution given a map of "unique" values.
         All values in distribution_map with the same value should get the sum
@@ -64,7 +67,8 @@ def flatten_distribution(distribution_map, probabilities):
 class SQLPrediction(namedtuple('SQLPrediction',
                                ('predictions',
                                 'sequence',
-                                'probability'))):
+                                'probability',
+                                'beam'))):
     """Contains prediction for a sequence."""
     __slots__ = ()
 
@@ -163,80 +167,111 @@ class SequencePredictorWithSchema(torch.nn.Module):
         else:
             decoder_input = torch.cat([self.start_token_embedding, torch.zeros(context_vector_size)], dim=0)
 
-        continue_generating = True
-        while continue_generating:
-            if len(sequence) == 0 or sequence[-1] != EOS_TOK:
-                _, decoder_state, decoder_states = torch_utils.forward_one_multilayer(self.lstms, decoder_input, decoder_states, dropout_amount)
-                prediction_input = PredictionInputWithSchema(decoder_state=decoder_state,
-                                                             input_hidden_states=encoder_states,
-                                                             schema_states=schema_states,
-                                                             snippets=snippets,
-                                                             input_sequence=input_sequence,
-                                                             previous_queries=previous_queries,
-                                                             previous_query_states=previous_query_states,
-                                                             input_schema=input_schema)
+        beam_search = BeamSearch(is_end_of_sequence=self.is_end_of_sequence, max_steps=max_generation_length, beam_size=self.params.beam_size)
+        prediction_step_input = PredictionStepInputWithSchema(
+            index=index,
+            decoder_input=decoder_input,
+            decoder_states=decoder_states,
+            encoder_states=encoder_states,
+            schema_states=schema_states,
+            snippets=snippets,
+            gold_sequence=gold_sequence,
+            input_sequence=input_sequence,
+            previous_queries=previous_queries,
+            previous_query_states=previous_query_states,
+            input_schema=input_schema,
+            dropout_amount=dropout_amount,
+            predictions=predictions,
+        )
 
-                prediction = self.token_predictor(prediction_input, dropout_amount=dropout_amount)
+        sequence, probability, final_state, beam = beam_search.search(start_state=prediction_step_input, step_function=self.beam_search_step_function, append_token_function=self.beam_search_append_token)
 
-                predictions.append(prediction)
-
-                if gold_sequence:
-                    output_token = gold_sequence[index]
-
-                    output_token_embedding = self.get_output_token_embedding(output_token, input_schema, snippets)
-
-                    decoder_input = self.get_decoder_input(output_token_embedding, prediction)
-
-                    sequence.append(gold_sequence[index])
-
-                    if index >= len(gold_sequence) - 1:
-                        continue_generating = False
-                else:
-                    assert prediction.scores.dim() == 1
-                    probabilities = F.softmax(prediction.scores, dim=0).cpu().data.numpy().tolist()
-
-                    distribution_map = prediction.aligned_tokens
-                    assert len(probabilities) == len(distribution_map)
-
-                    if self.params.use_previous_query and self.params.use_copy_switch and len(previous_queries) > 0:
-                        assert prediction.query_scores.dim() == 1
-                        query_token_probabilities = F.softmax(prediction.query_scores, dim=0).cpu().data.numpy().tolist()
-
-                        query_token_distribution_map = prediction.query_tokens
-
-                        assert len(query_token_probabilities) == len(query_token_distribution_map)
-
-                        copy_switch = prediction.copy_switch.cpu().data.numpy()
-
-                        # Merge the two
-                        probabilities = ((np.array(probabilities) * (1 - copy_switch)).tolist() + 
-                                         (np.array(query_token_probabilities) * copy_switch).tolist()
-                                         )
-                        distribution_map =  distribution_map + query_token_distribution_map
-                        assert len(probabilities) == len(distribution_map)
-
-                    # Get a new probabilities and distribution_map consolidating duplicates
-                    distribution_map, probabilities = flatten_distribution(distribution_map, probabilities)
-
-                    # Modify the probability distribution so that the UNK token can never be produced
-                    probabilities[distribution_map.index(UNK_TOK)] = 0.
-                    argmax_index = int(np.argmax(probabilities))
-
-                    argmax_token = distribution_map[argmax_index]
-                    sequence.append(argmax_token)
-
-                    output_token_embedding = self.get_output_token_embedding(argmax_token, input_schema, snippets)
-
-                    decoder_input = self.get_decoder_input(output_token_embedding, prediction)
-
-                    probability *= probabilities[argmax_index]
-
-                    continue_generating = False
-                    if index < max_generation_length and argmax_token != EOS_TOK:
-                        continue_generating = True
-
-            index += 1
-
-        return SQLPrediction(predictions,
+        return SQLPrediction(final_state.predictions,
                              sequence,
-                             probability)
+                             probability,
+                             beam)
+
+    def beam_search_step_function(self, prediction_step_input):
+        # get decoded token probabilities
+        prediction, tokens, token_probabilities, decoder_states = self.decode_next_token(prediction_step_input)
+        return tokens, token_probabilities, (prediction, decoder_states)
+
+    def beam_search_append_token(self, prediction_step_input, step_function_output, token_to_append, token_log_probability):
+        output_token_embedding = self.get_output_token_embedding(token_to_append, prediction_step_input.input_schema, prediction_step_input.snippets)
+        decoder_input = self.get_decoder_input(output_token_embedding, step_function_output[0])
+
+        predictions = prediction_step_input.predictions.copy()
+        predictions.append(step_function_output[0])
+        new_state = prediction_step_input._replace(index=prediction_step_input.index+1, decoder_input=decoder_input, predictions=predictions)
+
+        return new_state
+
+    def is_end_of_sequence(self, prediction_step_input, max_generation_length, sequence):
+        if prediction_step_input.gold_sequence:
+            return prediction_step_input.index >= len(prediction_step_input.gold_sequence)
+        else:
+            return prediction_step_input.index >= max_generation_length or (len(sequence) > 0 and sequence[-1] == EOS_TOK)
+
+    def decode_next_token(self, prediction_step_input):
+        (index,
+         decoder_input,
+         decoder_states,
+         encoder_states,
+         schema_states,
+         snippets,
+         gold_sequence,
+         input_sequence,
+         previous_queries,
+         previous_query_states,
+         input_schema,
+         dropout_amount,
+         predictions) = prediction_step_input
+
+        _, decoder_state, decoder_states = torch_utils.forward_one_multilayer(self.lstms, decoder_input, decoder_states, dropout_amount)
+        prediction_input = PredictionInputWithSchema(decoder_state=decoder_state,
+                                                     input_hidden_states=encoder_states,
+                                                     schema_states=schema_states,
+                                                     snippets=snippets,
+                                                     input_sequence=input_sequence,
+                                                     previous_queries=previous_queries,
+                                                     previous_query_states=previous_query_states,
+                                                     input_schema=input_schema)
+
+        prediction = self.token_predictor(prediction_input, dropout_amount=dropout_amount)
+
+        if gold_sequence:
+            decoded_token = gold_sequence[index]
+            distribution_map = [decoded_token]
+            probabilities = [1.0]
+
+        else:
+            assert prediction.scores.dim() == 1
+            probabilities = F.softmax(prediction.scores, dim=0).cpu().data.numpy().tolist()
+
+            distribution_map = prediction.aligned_tokens
+            assert len(probabilities) == len(distribution_map)
+
+            if self.params.use_previous_query and self.params.use_copy_switch and len(previous_queries) > 0:
+                assert prediction.query_scores.dim() == 1
+                query_token_probabilities = F.softmax(prediction.query_scores, dim=0).cpu().data.numpy().tolist()
+
+                query_token_distribution_map = prediction.query_tokens
+
+                assert len(query_token_probabilities) == len(query_token_distribution_map)
+
+                copy_switch = prediction.copy_switch.cpu().data.numpy()
+
+                # Merge the two
+                probabilities = ((np.array(probabilities) * (1 - copy_switch)).tolist() + 
+                                 (np.array(query_token_probabilities) * copy_switch).tolist()
+                                 )
+                distribution_map =  distribution_map + query_token_distribution_map
+                assert len(probabilities) == len(distribution_map)
+
+            # Get a new probabilities and distribution_map consolidating duplicates
+            distribution_map, probabilities = flatten_distribution(distribution_map, probabilities)
+
+            # Modify the probability distribution so that the UNK token can never be produced
+            probabilities[distribution_map.index(UNK_TOK)] = 0.
+
+        return prediction, distribution_map, probabilities, decoder_states

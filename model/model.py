@@ -1,6 +1,7 @@
 """ Class for the Sequence to sequence model for ATIS."""
 
 import os
+import pickle
 
 import torch
 import torch.nn.functional as F
@@ -77,19 +78,25 @@ def load_word_embeddings(input_vocabulary, output_vocabulary, output_vocabulary_
 
   def read_glove_embedding(embedding_filename, embedding_size):
     glove_embeddings = {}
-
-    with open(embedding_filename, encoding="utf8") as f:
-      cnt = 1
-      for line in f:
-        cnt += 1
-        if params.debug or not params.train:
-          if cnt == 1000:
-            print('Read 1000 word embeddings')
-            break
-        l_split = line.split()
-        word = " ".join(l_split[0:len(l_split) - embedding_size])
-        embedding = np.array([float(val) for val in l_split[-embedding_size:]])
-        glove_embeddings[word] = embedding
+    pkl_filename = embedding_filename + ".pkl"
+    if os.path.exists(pkl_filename):
+        with open(pkl_filename, 'rb') as f:
+            glove_embeddings = pickle.load(f)
+    else:
+        with open(embedding_filename, encoding="utf8") as f:
+          cnt = 1
+          for line in f:
+            cnt += 1
+            if params.debug or not params.train:
+              if cnt == 1000:
+                print('Read 1000 word embeddings')
+                break
+            l_split = line.split()
+            word = " ".join(l_split[0:len(l_split) - embedding_size])
+            embedding = np.array([float(val) for val in l_split[-embedding_size:]])
+            glove_embeddings[word] = embedding
+        with open(pkl_filename, 'wb') as f:
+            pickle.dump(glove_embeddings, f)
 
     return glove_embeddings
 
