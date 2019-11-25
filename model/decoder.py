@@ -202,7 +202,12 @@ class SequencePredictorWithSchema(torch.nn.Module):
 
         predictions = prediction_step_input.predictions.copy()
         predictions.append(step_function_output[0])
-        new_state = prediction_step_input._replace(index=prediction_step_input.index+1, decoder_input=decoder_input, predictions=predictions)
+        new_state = prediction_step_input._replace(
+            index=prediction_step_input.index+1,
+            decoder_input=decoder_input,
+            predictions=predictions,
+            decoder_states=step_function_output[1],
+        )
 
         return new_state
 

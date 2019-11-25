@@ -329,7 +329,7 @@ def main():
         last_save_file = train(model, data, params)
 
     if not last_save_file:
-        last_save_file = params.last_save_file
+        last_save_file = params.save_file
         assert last_save_file
     if params.evaluate and 'train' in params.evaluate_split:
         evaluate(model, data, params, last_save_file, split='train')

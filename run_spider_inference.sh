@@ -27,7 +27,7 @@ CUDA_VISIBLE_DEVICES=0 python3 run.py \
           --evaluate=1 \
           --evaluate_split="train" \
           --use_predicted_queries=0 \
-          --last_save_file=$LOGDIR/save_12 \
+          --save_file=$LOGDIR/save_12 \
           --beam_size=20 \
           --eval_maximum_sql_length=75
 
